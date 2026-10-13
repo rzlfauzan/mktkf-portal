@@ -212,6 +212,38 @@
   .dl-btn small { font-weight: 400; color: var(--muted); }
   .foot-note { margin-top: 12px; font-size: .85rem; color: var(--muted); }
 
+  /* Catatan update data (tab Tracing) */
+  .pickup { margin-top: 20px; background: var(--teal-soft); border-left: 4px solid var(--teal); border-radius: 8px; padding: 12px 16px; font-size: .95rem; line-height: 1.5; }
+  .pickup.warn { background: var(--yellow-soft); border-left-color: var(--yellow); }
+  .pickup b { color: var(--navy); }
+  .pickup small { display: block; color: var(--muted); margin-top: 2px; }
+
+  /* Transisi tampilan */
+  @keyframes kfFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .fade-in { animation: kfFade .28s ease both; }
+  @keyframes kfSpin { to { transform: rotate(360deg); } }
+  @keyframes kfPop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+
+  /* Pop up (loading & logout otomatis) */
+  .overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px;
+    background: rgba(20, 33, 43, .5); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s linear .2s; }
+  .overlay.show { opacity: 1; visibility: visible; transition: opacity .2s ease; }
+  .overlay.show .dialog { animation: kfPop .22s ease both; }
+  .dialog { background: var(--surface); border-radius: 14px; padding: 26px 28px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 18px 50px rgba(0, 0, 0, .28); border-top: 5px solid var(--teal); }
+  .dialog h2 { margin: 12px 0 6px; font-size: 1.2rem; color: var(--navy); }
+  .dialog p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .dialog .sub { margin-top: 10px; min-height: 1.2em; font-size: .85rem; }
+  .spin { width: 44px; height: 44px; margin: 0 auto; border-radius: 50%; border: 4px solid var(--teal-soft); border-top-color: var(--teal); animation: kfSpin .9s linear infinite; }
+  .dialog.warn { border-top-color: var(--red); }
+  .dialog.warn .count { width: 64px; height: 64px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 2rem; font-weight: 700; color: #fff; background: var(--red); font-variant-numeric: tabular-nums; }
+  .dialog .go { margin-top: 18px; width: 100%; }
+  @media (prefers-reduced-motion: reduce) {
+    .fade-in, .overlay.show .dialog { animation: none; }
+    .overlay, .overlay.show { transition: none; }
+    .spin { animation-duration: 2.4s; }
+  }
+
   @media (max-width: 760px) {
     .kpis { grid-template-columns: repeat(2, 1fr); }
     .logo img { height: 24px; }
@@ -272,6 +304,7 @@
 
       <!-- TRACING -->
       <div id="panel-trace" role="tabpanel" aria-labelledby="tab-trace" hidden>
+        <div class="pickup" id="t-pickup" role="status" aria-live="polite" hidden></div>
         <section class="search" aria-label="Pencarian">
           <div>
             <label for="q">Nomor SKB</label>
@@ -289,6 +322,23 @@
   <footer><b>PT Masaji Kargosentra Tama</b><span>samudera.id</span></footer>
 </div>
 
+<div class="overlay" id="loader" role="alertdialog" aria-modal="true" aria-labelledby="ld-title" aria-describedby="ld-text" aria-hidden="true">
+  <div class="dialog">
+    <div class="spin" aria-hidden="true"></div>
+    <h2 id="ld-title">Sedang memuat</h2>
+    <p id="ld-text">Mohon tunggu, sistem sedang memperbarui data.</p>
+    <p class="sub" id="ld-slow"></p>
+  </div>
+</div>
+<div class="overlay" id="idle" role="alertdialog" aria-modal="true" aria-labelledby="idle-title" aria-describedby="idle-text" aria-hidden="true">
+  <div class="dialog warn">
+    <div class="count" id="idle-count" aria-hidden="true">5</div>
+    <h2 id="idle-title">Anda akan keluar otomatis</h2>
+    <p id="idle-text">Tidak ada aktivitas selama 60 detik. Sesi berakhir dalam <b id="idle-sec">5</b> detik.</p>
+    <button class="go" id="idle-stay" type="button">Tetap masuk</button>
+  </div>
+</div>
+
 <script>
   // ===== PENGATURAN: isi dengan URL Web app (/exec) dari Apps Script > Deploy > Manage deployments =====
   var API_URL = 'https://script.google.com/macros/s/AKfycbzBGa3v3TcTuvEsN1Jzj0o-ypdVhHqy6XFYjV25XqheCiazRAsXUaeSn5_AOZ70ACoa/exec';
@@ -300,7 +350,7 @@
       withSuccessHandler: function (f) { ok = f; return api; },
       withFailureHandler: function (f) { fail = f; return api; }
     };
-    ['login', 'whoami', 'logout', 'searchShipments', 'getDashboard', 'listReports', 'downloadReport'].forEach(function (fn) {
+    ['login', 'whoami', 'logout', 'searchShipments', 'getDashboard', 'listReports', 'downloadReport', 'getPickupInfo'].forEach(function (fn) {
       api[fn] = function (arg) {
         fetch(API_URL, {
           method: 'POST', credentials: 'omit', redirect: 'follow',
@@ -439,10 +489,42 @@
   function saveToken(t) { TOKEN = t || ''; try { t ? sessionStorage.setItem('kf_token', t) : sessionStorage.removeItem('kf_token'); } catch (e) {} }
   function loadToken() { try { return sessionStorage.getItem('kf_token') || ''; } catch (e) { return ''; } }
 
+  // ---------- Loading (pop up + transisi) ----------
+  var LOADING = 0, LOAD_SHOW = null, LOAD_SLOW = null;
+  var LOAD_TEXT = {
+    getDashboard: 'Sistem sedang memuat data dashboard.',
+    listReports: 'Sistem sedang memuat daftar laporan.',
+    searchShipments: 'Sistem sedang mencari data shipment.',
+    downloadReport: 'Sistem sedang menyiapkan file laporan.'
+  };
+  function setOverlay(el, on) { el.classList.toggle('show', on); el.setAttribute('aria-hidden', on ? 'false' : 'true'); }
+  function loadStart(fn) {
+    if (!LOAD_TEXT[fn]) return false;
+    LOADING++; LAST_ACTIVITY = Date.now();
+    $('#ld-text').textContent = LOAD_TEXT[fn] + ' Mohon tunggu.';
+    if (LOADING === 1) {
+      $('#ld-slow').textContent = '';
+      // tunda 300 ms agar tidak berkedip untuk proses yang cepat
+      LOAD_SHOW = setTimeout(function () { setOverlay($('#loader'), true); }, 300);
+      LOAD_SLOW = setTimeout(function () { $('#ld-slow').textContent = 'Masih menunggu update dari server, mohon jangan tutup halaman ini.'; }, 8000);
+    }
+    return true;
+  }
+  function loadEnd() {
+    LOADING = Math.max(0, LOADING - 1);
+    if (LOADING === 0) {
+      clearTimeout(LOAD_SHOW); clearTimeout(LOAD_SLOW);
+      setOverlay($('#loader'), false);
+    }
+  }
+  function fadeIn(el) { el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
+
   function call(fn, arg, ok, fail) {
+    var tracked = loadStart(fn);
     google.script.run
-      .withSuccessHandler(ok)
+      .withSuccessHandler(function (d) { if (tracked) loadEnd(); ok(d); })
       .withFailureHandler(function (err) {
+        if (tracked) loadEnd();
         var m = (err && err.message) || String(err);
         if (m.indexOf('SESSION_EXPIRED') >= 0) { showLogin('Sesi berakhir. Silakan masuk kembali.'); return; }
         fail(m);
@@ -471,7 +553,13 @@
       .withFailureHandler(function (err) { b.disabled = false; b.textContent = 'Masuk'; $('#login-msg').innerHTML = '<p class="msg err">' + esc((err && err.message) || String(err)) + '</p>'; })
       .login({ username: u, password: p });
   }
-  function doLogout() { google.script.run.logout(TOKEN); DL_LOADED = false; showLogin(''); }
+  function doLogout() { endSession(''); }
+  function endSession(msg) {
+    google.script.run.logout(TOKEN);
+    DL_LOADED = false; PICKUP_AT = 0;
+    setOverlay($('#idle'), false); setOverlay($('#loader'), false);
+    showLogin(msg || '');
+  }
 
   // ---------- Tab ----------
   var TITLES = { dash: 'Dashboard SLA Pengiriman', trace: 'Lacak Pengiriman SKB', dl: 'Download Laporan SLA' };
@@ -482,13 +570,15 @@
       $('#panel-' + k).hidden = k !== which;
     });
     $('#hero-title').textContent = TITLES[which];
+    fadeIn($('#panel-' + which));
     if (which === 'dl' && !DL_LOADED) loadReports();
+    if (which === 'trace') loadPickup();
   }
 
   // ---------- Download ----------
   function loadReports() {
     $('#dl-msg').innerHTML = '';
-    call('listReports', { token: TOKEN }, function (d) { DL_LOADED = true; renderReports(d); },
+    call('listReports', { token: TOKEN }, function (d) { DL_LOADED = true; renderReports(d); fadeIn($('#dl-out')); },
       function (m) { $('#dl-msg').innerHTML = '<p class="msg err">' + esc(m) + '</p>'; });
   }
   function renderReports(d) {
@@ -526,7 +616,7 @@
     if (!query) { showMsg('Masukkan minimal satu nomor SKB.'); $('#q').focus(); return; }
     showMsg(''); setBusy(true);
     call('searchShipments', { token: TOKEN, query: query },
-      function (res) { setBusy(false); render(res); },
+      function (res) { setBusy(false); render(res); fadeIn($('#t-out')); },
       function (m) { setBusy(false); showMsg(m); });
   }
 
@@ -534,7 +624,7 @@
   function loadDashboard() {
     $('#d-msg').innerHTML = '';
     call('getDashboard', { token: TOKEN, month: $('#f-month').value || '' },
-      renderDashboard,
+      function (d) { renderDashboard(d); fadeIn($('#d-out')); },
       function (m) { $('#d-msg').innerHTML = '<p class="msg err">' + esc(m) + '</p>'; });
   }
 
@@ -618,6 +708,48 @@
     $('#d-table').innerHTML = '<div class="tbl' + (rows.length > 15 ? ' tall' : '') + '"><table>' + head + '<tbody>' +
       (body || '<tr><td colspan="' + (7 + ltCols.length) + '">Tidak ada data untuk bagian ini.</td></tr>') + '</tbody></table></div>';
   }
+
+  // ---------- Catatan update data (tab Tracing) ----------
+  var PICKUP_AT = 0;
+  function loadPickup() {
+    if (Date.now() - PICKUP_AT < 60000) return;
+    call('getPickupInfo', { token: TOKEN }, function (d) {
+      PICKUP_AT = Date.now();
+      var box = $('#t-pickup');
+      var sync = d.lastSync ? '<small>Data disinkronkan terakhir: ' + esc(d.lastSync) + '</small>' : '';
+      if (d.lastPickup) {
+        box.className = 'pickup';
+        box.innerHTML = 'Update data shipment terakhir (Pick Up Date) bulan ' + esc(d.monthLabel) + ': <b>' + esc(d.lastPickup) + '</b>. ' +
+          'Shipment dengan Pick Up Date setelah tanggal ini belum tersedia di tracing.' + sync;
+      } else {
+        box.className = 'pickup warn';
+        box.innerHTML = 'Belum ada shipment dengan Pick Up Date pada bulan ' + esc(d.monthLabel) + '.' +
+          (d.lastPickupAny ? ' Pick Up Date terakhir pada data: <b>' + esc(d.lastPickupAny) + '</b>.' : '') + sync;
+      }
+      box.hidden = false;
+    }, function () { $('#t-pickup').hidden = true; });
+  }
+
+  // ---------- Logout otomatis jika tidak ada aktivitas ----------
+  var IDLE_MS = 60000, COUNTDOWN_S = 5, LAST_ACTIVITY = Date.now();
+  function idleWarningOn() { return $('#idle').classList.contains('show'); }
+  function markActive() { if (!idleWarningOn()) LAST_ACTIVITY = Date.now(); }
+  ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel'].forEach(function (ev) {
+    window.addEventListener(ev, markActive, { passive: true, capture: true });
+  });
+  $('#idle-stay').addEventListener('click', function () { LAST_ACTIVITY = Date.now(); setOverlay($('#idle'), false); });
+  setInterval(function () {
+    if ($('#view-app').hidden) { if (idleWarningOn()) setOverlay($('#idle'), false); return; }
+    if (LOADING > 0) { LAST_ACTIVITY = Date.now(); return; }   // proses berjalan dihitung sebagai aktivitas
+    var idle = Date.now() - LAST_ACTIVITY;
+    if (idle >= IDLE_MS + COUNTDOWN_S * 1000) {
+      endSession('Anda keluar otomatis karena tidak ada aktivitas selama 60 detik. Silakan masuk kembali.');
+    } else if (idle >= IDLE_MS) {
+      var left = Math.max(1, Math.ceil((IDLE_MS + COUNTDOWN_S * 1000 - idle) / 1000));
+      $('#idle-count').textContent = left; $('#idle-sec').textContent = left;
+      if (!idleWarningOn()) { setOverlay($('#loader'), false); setOverlay($('#idle'), true); $('#idle-stay').focus(); }
+    }
+  }, 250);
 
   // ---------- Event ----------
   $('#login-btn').addEventListener('click', doLogin);
